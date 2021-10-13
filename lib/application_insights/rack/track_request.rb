@@ -51,10 +51,10 @@ module ApplicationInsights
         success = status.to_i < 400
 
         request = ::Rack::Request.new env
-        options = options_hash(request)
+        options = options_hash(request, env)
 
         data = request_data(request_id, start_time, duration, status, success, options)
-        context = telemetry_context(request_id, env['HTTP_REQUEST_ID'])
+        context = telemetry_context(request_id, env)
 
         @client.channel.write data, context, start_time
 
@@ -73,6 +73,16 @@ module ApplicationInsights
           @sender = sender
           @client.channel.queue.sender = @sender
         end
+      end
+
+      def user_id(env)
+        session = env['rack.session']
+        if session
+          # be ready for every kind of ID in session, uid takes precedence
+          id = session[:user_id] if session[:user_id]
+          id = session[:user_uid] if session[:user_uid]
+        end
+        id
       end
 
       def client
@@ -118,11 +128,12 @@ module ApplicationInsights
         id[root_start..root_end]
       end
 
-      def options_hash(request)
+      def options_hash(request, env)
         {
             name: "#{request.request_method} #{request.path}",
             http_method: request.request_method,
-            url: request.url
+            url: request.url,
+            properties: { "user" => user_id(env) }
         }
       end
 
@@ -141,11 +152,13 @@ module ApplicationInsights
         )
       end
 
-      def telemetry_context(request_id, request_id_header)
+      def telemetry_context(request_id, env)
         context = Channel::TelemetryContext.new
         context.instrumentation_key = @instrumentation_key
         context.operation.id = operation_id(request_id)
-        context.operation.parent_id = request_id_header
+        context.operation.parent_id = env['HTTP_REQUEST_ID']
+        context.cloud.role = Rails.application.class.parent_name.underscore.dasherize 
+        context.user.id = user_id(env)
 
         context
       end
